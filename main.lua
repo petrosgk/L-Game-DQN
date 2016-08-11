@@ -2,13 +2,14 @@ require 'xlua'
 local game = require 'game'
 local DQN = require 'DQN/deepqlearn'
 
-local MAX_NUMBER_OF_GAMES = 20000  -- max number of games to run
-local CHECKPOINT = 2000 -- check progress every specified number of games
+local MAX_NUMBER_OF_GAMES = 40000  -- max number of games to run
+local CHECKPOINT = 500 -- check progress every specified number of games
 
 local P1_winCount_final, P2_winCount_final, drawCount_final = 0, 0, 0
 
 local USE_AI = true
 local LEARNING = false -- training or validating
+local CONTINUE = false -- if continuing previous training
 
 local PRINT = false
 
@@ -21,6 +22,12 @@ if USE_AI then
     -- learning phase
     local P1_winCount, P2_winCount, drawCount = 0, 0, 0
     DQN.learning = true
+    -- if continuing previous training
+    if CONTINUE then
+      -- load the partially trained model
+      local t_net = torch.load('learned_model.dat')
+      DQN.loadModel(t_net)
+    end
     for i = 1, MAX_NUMBER_OF_GAMES do
       -- run specified number of games
       game:startGame()
@@ -53,8 +60,6 @@ if USE_AI then
         torch.save('learned_model.dat', DQN.net, 'binary')
       end
     end
-    -- save final learned model
-    torch.save('learned_model.dat', DQN.net, 'binary')
   else
     io.write(string.format('Evaluating...\n\n'))
     -- testing phase
