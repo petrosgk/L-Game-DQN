@@ -2,17 +2,15 @@ require 'nn'
 require 'optim'
 require 'utils'
 
-torch.setdefaulttensortype('torch.DoubleTensor')
+torch.setdefaulttensortype('torch.FloatTensor')
 
 local DQN = {}
 
 function DQN.init(state_size, actions)
   -- Maximum number of memories (= games) that we will save for training
   DQN.experience_size = 10000
-  -- replay memory enabled
-  DQN.replay = true
   -- number of games to sample from replay memory on each recall
-  DQN.sampleN = 20
+  DQN.sampleN = 10
   -- gamma is a crucial parameter that controls how much plan-ahead the agent does. In [0,1]
   -- Determines the amount of weight placed on the utility of the state resulting from an action.
   DQN.gamma = 0.9
@@ -168,8 +166,9 @@ function DQN.computeGradient(inputs, targets)
     return f, DQN.gradParameters
   end
   -- fire up optim.adadelta
+  local adadeltaConfig = {rho = 0.95, eps = 1e-6}
   local adadeltaState = {}
-  optim.adadelta(feval, DQN.parameters, adadeltaState)
+  optim.adadelta(feval, DQN.parameters, adadeltaConfig, adadeltaState)
 end
 
 --[[
@@ -197,9 +196,6 @@ function DQN.backward()
 	acquired during a game -]]
   local game_e = {}
 
-  local pred, qval
-  local TDErrorSum, TDErrorAvg = 0, 0
-
   -- start from the terminal state and go backwards until the initial state
   for n = num_states, 2, - 1 do
     local state0 = DQN.state_window[n-1]
@@ -207,45 +203,34 @@ function DQN.backward()
     local reward0 = DQN.reward_window[1]
     local state1 = DQN.state_window[n]
 
-    if DQN.replay then
-      -- create experience
-      local e = {state0, action0, reward0, state1}
-      -- add experience to the total experience acquired on this game
-      table.insert(game_e, e)
-    end
+    -- create experience
+    local e = {state0, action0, reward0, state1}
+    -- add experience to the total experience acquired on this game
+    table.insert(game_e, e)
 
     -- start training
     local all_outputs = DQN.net:forward(torch.Tensor(state0))
     inputs[n-1] = torch.Tensor(state0)
     targets[n-1] = all_outputs:clone()
     pred = targets[n-1][action0]
-    if n == #DQN.state_window then -- if terminal state
+    if n == num_states then -- if terminal state
       targets[n-1][action0] = reward0
     else
       local best_action = DQN.policy(torch.Tensor(state1))
       targets[n-1][action0] = DQN.gamma * best_action.value
     end
-    qval = targets[n-1][action0]
-    -- TD-Error gives us a measure of how "surprising" a Q-value update is to the agent
-    local tdError = pred - qval
-    TDErrorSum = TDErrorSum + tdError
   end
-
-  -- average TD-Error for this game
-  TDErrorAvg = TDErrorSum/(num_states - 1)
 
   DQN.computeGradient(inputs, targets)
 
-  if DQN.replay then
-    -- add this game and the experiences acquired with it to the replay memory table
-    if DQN.experience_count < DQN.experience_size then
-      table.insert(DQN.experience, game_e)
-      DQN.experience_count = DQN.experience_count + 1
-    else
-      -- if max size for replay memory reached start replacing older experiences
-      table.remove(DQN.experience, 1)
-      table.insert(DQN.experience, game_e)
-    end
+  -- add this game and the experiences acquired with it to the replay memory table
+  if DQN.experience_count < DQN.experience_size then
+    table.insert(DQN.experience, game_e)
+    DQN.experience_count = DQN.experience_count + 1
+  else
+    -- if max size for replay memory reached start replacing older experiences
+    table.remove(DQN.experience, 1)
+    table.insert(DQN.experience, game_e)
   end
 
   -- free memory
@@ -254,38 +239,35 @@ function DQN.backward()
   DQN.reward_window = {}
   game_e = {}
 
-  if DQN.replay then
-    if DQN.experience_count >= DQN.sampleN then
-      for N = 1, DQN.sampleN do
-        -- sample a random game from replay memory
-        local re = DQN.experience[torch.random(DQN.gen, DQN.experience_count)]
-        -- each game consists of a number of experiences
-        local numExp = #re
-        inputs = torch.Tensor(numExp, DQN.net_inputs)
-        targets = torch.Tensor(numExp, DQN.net_outputs)
-        for n = 1, numExp do
-          local e = re[n]
-          local state0 = e[1]
-          local action0 = e[2]
-          local reward0 = e[3]
-          local state1 = e[4]
-          -- start training
-          local all_outputs = DQN.net:forward(torch.Tensor(state0))
-          inputs[n] = torch.Tensor(state0)
-          targets[n] = all_outputs:clone()
-          if n == 1 then -- if terminal state
-            targets[n][action0] = reward0
-          else
-            local best_action = DQN.policy(torch.Tensor(state1))
-            targets[n][action0] = DQN.gamma * best_action.value
-          end
+  if DQN.experience_count >= DQN.sampleN then
+    for N = 1, DQN.sampleN do
+      -- sample a random game from replay memory
+      local re = DQN.experience[torch.random(DQN.gen, DQN.experience_count)]
+      -- each game consists of a number of experiences
+      local numExp = #re
+      inputs = torch.Tensor(numExp, DQN.net_inputs)
+      targets = torch.Tensor(numExp, DQN.net_outputs)
+      for n = 1, numExp do
+        local e = re[n]
+        local state0 = e[1]
+        local action0 = e[2]
+        local reward0 = e[3]
+        local state1 = e[4]
+        -- start training
+        local all_outputs = DQN.net:forward(torch.Tensor(state0))
+        inputs[n] = torch.Tensor(state0)
+        targets[n] = all_outputs:clone()
+        if n == 1 then -- if terminal state
+          targets[n][action0] = reward0
+        else
+          local best_action = DQN.policy(torch.Tensor(state1))
+          targets[n][action0] = DQN.gamma * best_action.value
         end
-        DQN.computeGradient(inputs, targets)
       end
+      DQN.computeGradient(inputs, targets)
     end
   end
 
 end
 
 return DQN
-
