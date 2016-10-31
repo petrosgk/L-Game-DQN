@@ -2,8 +2,6 @@ local board = require 'board'
 
 local Random_Player = {}
 
-local legalActions
-
 -- initialize player
 function Random_Player:initPlayer(o, playerId, LPawn, NPawn1, NPawn2, gen)
   o = o or {}
@@ -14,6 +12,7 @@ function Random_Player:initPlayer(o, playerId, LPawn, NPawn1, NPawn2, gen)
   o.NPawn1 = NPawn1
   o.NPawn2 = NPawn2
   o.gen = gen
+  o.legalActions = {}
   return o
 end
 
@@ -25,14 +24,14 @@ end
 
 -- get available moves for the player pawn (L-Pawn) for the current board state
 function Random_Player:getAvailMoves()
-  legalActions = self:getLegalActions()
-  return #legalActions
+  self.legalActions = self:getLegalActions()
+  return #self.legalActions
 end
 
 -- make move --
 function Random_Player:play()
   -- randomly choose one move
-  local action = legalActions[torch.random(self.gen, #legalActions)]
+  local action = self.legalActions[torch.random(self.gen, #self.legalActions)]
   -- remove pawn from current position
   self:pickUpPawn(self.LPawn)
   -- set new pawn's position as current
@@ -40,7 +39,6 @@ function Random_Player:play()
   -- place the pawn in the new position
   self:placePawn(self.LPawn)
   -- play neutral pawn
-  -- choose randomly one of the N-Pawns
   local NPawn
   if action.NPawnChoice == 1 then
     NPawn = self.NPawn1
