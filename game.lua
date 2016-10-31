@@ -7,11 +7,10 @@ local Game = {}
 
 local PRINT
 
-local USE_AI
-local HUMAN
+local P1_IS_AI, P2_IS_AI
+local P1_IS_LEARNING, P2_IS_LEARNING
 
 local LPawn_P1, LPawn_P2, NPawn1, NPawn2
-local player1, player2
 
 local moveCount_P1, moveCount_P2 = 0, 0
 local winner
@@ -42,27 +41,35 @@ function Game:initPawns()
 end
 
 function Game:initPlayers()
-  --initialize RNG for random player
-  local genP1 = torch.Generator()
-  torch.seed(genP1)
-  -- initialize Player 1
-  player1 = random_player:initPlayer(nil, 1, LPawn_P1, NPawn1, NPawn2, genP1)
-  -- initialize Player 2
-  if USE_AI then
-    player2 = ai_player:initPlayer(nil, 2, LPawn_P2, NPawn1, NPawn2)
+  if P1_IS_AI then
+    -- initialize Player 1 as AI player
+    Game.player1 = ai_player:initPlayer(nil, 1, LPawn_P1, NPawn1, NPawn2)
   else
-    --initialize RNG for random player 2
+    --initialize RNG for random player
+    local genP1 = torch.Generator()
+    torch.seed(genP1)
+    -- initialize Player 1 as random player
+    Game.player1 = random_player:initPlayer(nil, 1, LPawn_P1, NPawn1, NPawn2, genP1)
+  end
+  if P2_IS_AI then
+    -- initialize Player 2 as AIplayer
+    Game.player2 = ai_player:initPlayer(nil, 2, LPawn_P2, NPawn1, NPawn2)
+  else
+    --initialize RNG for random player
     local genP2 = torch.Generator()
     torch.seed(genP2)
-    player2 = random_player:initPlayer(nil, 2, LPawn_P2, NPawn1, NPawn2, genP2)
+    -- initialize Player 2 as random player
+    Game.player2 = random_player:initPlayer(nil, 2, LPawn_P2, NPawn1, NPawn2, genP2)
   end
 end
 
 
-function Game:initGame(print, use_ai, human)
+function Game:initGame(print, p1_is_ai, p2_is_ai, p1_is_learning, p2_is_learning)
   PRINT = print
-  USE_AI = use_ai
-  HUMAN = human
+  P1_IS_AI = p1_is_ai
+  P2_IS_AI = p2_is_ai
+  P1_IS_LEARNING = p1_is_learning
+  P2_IS_LEARNING = p2_is_learning
   -- initialize the board
   board:initBoard()
   -- initialize the pawns
@@ -75,53 +82,32 @@ function Game:startGame()
   if PRINT then
     board:printBoard()
   end
-  local P1_availMoves, P2_availMoves -- available moves for each player
-  P1_availMoves = player1:getAvailMoves()
-  if P1_availMoves > 0 then
-    player1:play()
+  while Game.player1:getAvailMoves() > 0 and Game.player2:getAvailMoves() > 0 do
+    Game.player1:play()
     moveCount_P1 = moveCount_P1 + 1
     if PRINT then
       print('Player 1 move: ')
       board:printBoard()
     end
-  end
-  P2_availMoves = player2:getAvailMoves()
-  if P2_availMoves > 0 then
-    player2:play()
-    moveCount_P2 = moveCount_P2 + 1
-    if PRINT then
-      print('Player 2 move: ')
-      board:printBoard()
-    end
-  end
-  while P1_availMoves > 0 and P2_availMoves > 0 do
-    P1_availMoves = player1:getAvailMoves()
-    if P1_availMoves > 0 then
-      player1:play()
-      moveCount_P1 = moveCount_P1 + 1
-      if PRINT then
-        print('Player 1 move: ')
-        board:printBoard()
-      end
-    end
-    P2_availMoves = player2:getAvailMoves()
-    if P2_availMoves > 0 and P1_availMoves > 0  then
-      player2:play()
+    if Game.player2:getAvailMoves() > 0 then
+      Game.player2:play()
       moveCount_P2 = moveCount_P2 + 1
       if PRINT then
         print('Player 2 move: ')
         board:printBoard()
       end
+    else
+      break
     end
   end
-  if P1_availMoves > 0 and P2_availMoves == 0 then
-    winner = player1.playerId
+  if Game.player1:getAvailMoves() > 0 and Game.player2:getAvailMoves() == 0 then
+    winner = Game.player1.playerId
     self:endGame()
-  elseif P1_availMoves == 0 and P2_availMoves > 0 then
-    winner = player2.playerId
+  elseif Game.player1:getAvailMoves() == 0 and Game.player2:getAvailMoves() > 0 then
+    winner = Game.player2.playerId
     self:endGame()
   else
-    winner = nil
+    winner = 0
     self:endGame()
   end
 end
@@ -132,17 +118,20 @@ function Game:endGame()
     board:printBoard()
   end
   if PRINT then
-    if winner == player1.playerId then
+    if winner == Game.player1.playerId then
       print('Player 1' .. ' wins in ' .. moveCount_P1 .. ' moves')
-    elseif winner == player2.playerId then
+    elseif winner == Game.player2.playerId then
       print('Player 2' .. ' wins in ' .. moveCount_P2 .. ' moves')
     else
       print('Draw!')
     end
     print('\n')
   end
-  if USE_AI then
-    player2:updateReward(winner)
+  if P1_IS_AI and P1_IS_LEARNING then
+    Game.player1:train(winner)
+  end
+  if P2_IS_AI and P2_IS_LEARNING then
+    Game.player2:train(winner)
   end
   self:resetGame()
 end
@@ -150,8 +139,8 @@ end
 function Game:resetGame()
   board:resetBoard()
   self:initPawns()
-  player1:resetPlayer(LPawn_P1, NPawn1, NPawn2)
-  player2:resetPlayer(LPawn_P2, NPawn1, NPawn2)
+  Game.player1:resetPlayer(LPawn_P1, NPawn1, NPawn2)
+  Game.player2:resetPlayer(LPawn_P2, NPawn1, NPawn2)
   moveCount_P1, moveCount_P2 = 0, 0
 end
 
@@ -160,9 +149,26 @@ function Game:getWinner()
 end
 
 function Game:getAgentProgress()
-  local reward_tot = player2:getProgress()
-  player2:resetProgress()
-  return reward_tot
+  if P1_IS_LEARNING and not (P1_IS_LEARNING and P2_IS_LEARNING) then
+    local reward_tot
+    reward_tot = Game.player1:getProgress()
+    Game.player1:resetProgress()
+    return reward_tot
+  end
+  if P2_IS_LEARNING and not (P1_IS_LEARNING and P2_IS_LEARNING) then
+    local reward_tot
+    reward_tot = Game.player2:getProgress()
+    Game.player2:resetProgress()
+    return reward_tot
+  end
+  if P1_IS_LEARNING and P2_IS_LEARNING then
+    local reward_tot_p1, reward_tot_p2
+    reward_tot_p1 = Game.player1:getProgress()
+    Game.player1:resetProgress()
+    reward_tot_p2 = Game.player2:getProgress()
+    Game.player2:resetProgress()
+    return reward_tot_p1, reward_tot_p2
+  end
 end
 
 return Game
