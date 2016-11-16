@@ -56,7 +56,8 @@ function Random_Player:pickUpPawn(pawn)
   local i = 1
   while pawn.pawnPos[i] do
     local x, y = pawn.pawnPos[i][1], pawn.pawnPos[i][2]
-    board[x][y] = 0
+    board[x][y].id = 0
+    board[x][y].color = {255,255,255}
     i = i + 1
   end
 end
@@ -67,7 +68,8 @@ function Random_Player:placePawn(pawn)
   local i = 1
   while pawn.pawnPos[i] do
     local x, y = pawn.pawnPos[i][1], pawn.pawnPos[i][2]
-    board[x][y] = pawn.pawnId
+    board[x][y].id = pawn.pawnId
+    board[x][y].color = pawn.pawnColor
     i = i + 1
   end
 end
@@ -76,7 +78,7 @@ function Random_Player:getLegalActions(pawnType, NPawn)
 
   local legalActions = {}
 
-  function initAction()
+  local function initAction()
     local LPawnPos = {}
     for i = 1,4 do
       LPawnPos[i] = {}
@@ -320,10 +322,10 @@ function Random_Player:isALegalAction(action, pawn)
   local numFreeSlots, numEqualSlots = 0, 0
   for i = 1, 4 do
     local x, y = action.LPawnPos[i][1], action.LPawnPos[i][2]
-    if board[x][y] == 0 or board[x][y] == self.LPawn.pawnId then
+    if board[x][y].id == 0 or board[x][y].id == self.LPawn.pawnId then
       numFreeSlots = numFreeSlots + 1
     end
-    if board[x][y] == self.LPawn.pawnId then
+    if board[x][y].id == self.LPawn.pawnId then
       numEqualSlots = numEqualSlots + 1
     end
   end
@@ -339,10 +341,10 @@ function Random_Player:isALegalAction(action, pawn)
   else
     NPawnId = self.NPawn2.pawnId
   end
-  if board[x][y] == 0 or board[x][y] == NPawnId then
+  if board[x][y].id == 0 or board[x][y].id == NPawnId then
     numFreeSlots = numFreeSlots + 1
   end
-  if board[x][y] == NPawnId then
+  if board[x][y].id == NPawnId then
     numEqualSlots = numEqualSlots + 1
   end
   if numFreeSlots == 1 and numFreeSlots > numEqualSlots then
