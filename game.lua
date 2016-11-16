@@ -17,10 +17,10 @@ local winner
 
 function Game:initPawns()
   -- initialize player and neutral pawns
-  LPawn_P1 = pawn:init(nil, 'Player', 1)
-  LPawn_P2 = pawn:init(nil, 'Player', 2)
-  NPawn1 = pawn:init(nil, 'Neutral', 3)
-  NPawn2 = pawn:init(nil, 'Neutral', 4)
+  LPawn_P1 = pawn:init(nil, 'Player', 1, {0,0,255})
+  LPawn_P2 = pawn:init(nil, 'Player', 2, {255,0,0})
+  NPawn1 = pawn:init(nil, 'Neutral', 3, {255,255,0})
+  NPawn2 = pawn:init(nil, 'Neutral', 4, {0,255,0})
   -- place Player 1's pawns on their initial positions on the board
   LPawn_P1.pawnPos[1][1], LPawn_P1.pawnPos[1][2] = 2, 2
   LPawn_P1.pawnPos[2][1], LPawn_P1.pawnPos[2][2] = 3, 2
@@ -80,6 +80,7 @@ end
 
 function Game:startGame()
   if PRINT then
+    posix.unistd.sleep(1)
     board:printBoard()
   end
   while Game.player1:getAvailMoves() > 0 and Game.player2:getAvailMoves() > 0 do
@@ -87,6 +88,7 @@ function Game:startGame()
     moveCount_P1 = moveCount_P1 + 1
     if PRINT then
       print('Player 1 move: ')
+      posix.unistd.sleep(1)
       board:printBoard()
     end
     if Game.player2:getAvailMoves() > 0 then
@@ -94,6 +96,7 @@ function Game:startGame()
       moveCount_P2 = moveCount_P2 + 1
       if PRINT then
         print('Player 2 move: ')
+        posix.unistd.sleep(1)
         board:printBoard()
       end
     else
