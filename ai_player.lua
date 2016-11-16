@@ -25,7 +25,7 @@ function AI_Player:initPlayer(o, playerId, LPawn, NPawn1, NPawn2)
   -- track cumulative reward of agent
   o.reward_tot = 0
   -- Maximum number of memories (= games) that we will save for training
-  o.experience_size = 10000
+  o.experience_size = 25000
   -- number of games to sample from replay memory on each recall
   o.sampleN = 10
   -- gamma is a crucial parameter that controls how much plan-ahead the agent does. In [0,1]
@@ -36,24 +36,29 @@ function AI_Player:initPlayer(o, playerId, LPawn, NPawn1, NPawn2)
   o.epsilon = 0.05
   -- min value epsilon is allowed to reach
   o.epsilon_min = 0.01
+  -- target network update frequency
+  o.tau = 1
   -- epsilon annealing factor
   -- controls the annealing rate of epsilon
   o.annealing_factor = 100000
   -- input that goes into neural net
   o.net_inputs = 16
-  -- size of each hidden layer of the neural net
-  o.hidden_nodes_L1 = 512
-  o.hidden_nodes_L2 = 512
+  -- size of hidden layer of the neural net
+  o.hidden_nodes = 512
   -- output of the neural net
   o.net_outputs = 128
   -- define neural net architecture
   o.net = nn.Sequential()
-  o.net:add(nn.Linear(o.net_inputs, o.hidden_nodes_L1))
-  o.net:add(nn.ReLU())
-  o.net:add(nn.Linear(o.hidden_nodes_L1, o.hidden_nodes_L2))
-  o.net:add(nn.ReLU())
-  o.net:add(nn.Linear(o.hidden_nodes_L2, o.net_outputs))
+  o.net:add(nn.Linear(o.net_inputs, o.hidden_nodes))
+  o.net:add(nn.ReLU(true))
+  o.net:add(nn.Linear(o.hidden_nodes, o.hidden_nodes))
+  o.net:add(nn.ReLU(true))
+  o.net:add(nn.Linear(o.hidden_nodes, o.net_outputs))
   o.criterion = nn.MSECriterion()
+  -- target network
+  o.target_net = o.net:clone()
+  -- target network always in eval mode
+  o.target_net:evaluate()
   -- is learning enabled (false by default)
   o.learning = false;
   -- parameters for optim.adadelta
@@ -112,7 +117,7 @@ function AI_Player:forward(state)
   -- if we have enough (state, action) pairs in our memory to fill up
   -- our network input then we'll proceed to let our network choose the action
   if self.forward_passes > 0 then
-    local net_input = torch.Tensor(state)
+    local net_input = torch.FloatTensor(state)
     -- use epsilon probability to choose whether we use network action or random action
     if randf(self.gen, 0, 1) < self.epsilon then
       action = self:random_action();
@@ -182,8 +187,8 @@ function AI_Player:computeGradient(inputs, targets)
   -- fire up optim.sgd
   local sgdConfig = {learningRate = 1, learningRateDecay = 1e-4,
     momentum = 0.9, dampening = 0, nesterov = true}
-  local sgdState = {}
-  optim.sgd(feval, self.parameters, sgdConfig, sgdState)
+  local rmspropConfig = {learningRate = 0.001}
+  optim.adadelta(feval, self.parameters, {})
 end
 
 --[[
@@ -204,11 +209,8 @@ function AI_Player:backward()
 
   local num_states = #self.state_window
 
-  local inputs = torch.Tensor(num_states - 1, self.net_inputs)
-  local targets = torch.Tensor(num_states - 1, self.net_outputs)
-
   --[[ a game experience consists of all the experience tuples [state0,action0,reward0,state1]
-  acquired during a played game -]]
+  acquired during a game -]]
   local game_e = {}
 
   -- from the initial state until the terminal state
@@ -218,39 +220,25 @@ function AI_Player:backward()
     local reward0 = self.reward_window[n-1]
     local state1 = self.state_window[n]
 
-    if self.sampleN > 0 then
-      -- create experience
-      local e = {state0, action0, reward0, state1}
-      -- add experience to the total experience acquired on this game
-      table.insert(game_e, e)
-    end
+    -- convert to byte tensors to save memory
+    state0 = torch.ByteTensor(state0)
+    action0 = torch.ByteTensor({action0})
+    state1 = torch.ByteTensor(state1)
 
-    -- start training
-    local all_outputs = self.net:forward(torch.Tensor(state0))
-    inputs[n-1] = torch.Tensor(state0)
-    targets[n-1] = all_outputs:clone()
-    if n == num_states then -- if terminal state
-      local qmax = reward0
-      targets[n-1][action0] = qmax
-    else
-      local best_action = self:policy(torch.Tensor(state1))
-      local qmax = reward0 + self.gamma * best_action.value
-      targets[n-1][action0] = qmax
-    end
+    -- create experience
+    local e = {state0, action0, reward0, state1}
+    -- add experience to the total experience acquired on this game
+    table.insert(game_e, e)
   end
 
-  self:computeGradient(inputs, targets)
-
-  if self.sampleN > 0 then
-    -- add this game and the experiences acquired with it to the replay memory table
-    if self.experience_count < self.experience_size then
-      table.insert(self.experience, game_e)
-      self.experience_count = self.experience_count + 1
-    else
-      -- if max size for replay memory reached start replacing older experiences
-      table.remove(self.experience, 1)
-      table.insert(self.experience, game_e)
-    end
+  -- add this game and the experiences acquired with it to the replay memory table
+  if self.experience_count < self.experience_size then
+    table.insert(self.experience, game_e)
+    self.experience_count = self.experience_count + 1
+  else
+    -- if max size for replay memory reached start replacing older experiences
+    table.remove(self.experience, 1)
+    table.insert(self.experience, game_e)
   end
 
   -- free memory
@@ -258,38 +246,44 @@ function AI_Player:backward()
   self.action_window = {}
   self.reward_window = {}
 
-  if self.sampleN > 0 then
-    if self.experience_count >= self.sampleN then
-      for N = 1, self.sampleN do
-        -- sample a random game from replay memory
-        local rg = self.experience[torch.random(self.gen, self.experience_count)]
-        -- each game consists of a number of experiences
-        local numExp = #rg
-        inputs = torch.Tensor(numExp, self.net_inputs)
-        targets = torch.Tensor(numExp, self.net_outputs)
-        for n = 1, numExp do
-          local e = rg[n]
-          local state0 = e[1]
-          local action0 = e[2]
-          local reward0 = e[3]
-          local state1 = e[4]
-          -- start training
-          local all_outputs = self.net:forward(torch.Tensor(state0))
-          inputs[n] = torch.Tensor(state0)
-          targets[n] = all_outputs:clone()
-          if n == numExp then -- if terminal state
-            local qmax = reward0
-            targets[n][action0] = qmax
-          else
-            local best_action = self:policy(torch.Tensor(state1))
-            local qmax = reward0 + self.gamma * best_action.value
-            targets[n][action0] = qmax
+  if self.experience_count >= self.sampleN then
+    for n = 1, self.sampleN do
+      -- sample a random game from replay memory
+      local re = self.experience[torch.random(self.gen, self.experience_count)]
+      local numExp = #re
+      local states = torch.Tensor(numExp, self.net_inputs)
+      local targets = torch.Tensor(numExp, self.net_outputs)
+      for n = 1, numExp do
+        local e = re[n]
+        local state0 = e[1]:typeAs(torch.FloatTensor())
+        local action0 = e[2][1]
+        local reward0 = e[3]
+        local state1 = e[4]:typeAs(torch.FloatTensor())
+        -- start training
+        local all_outputs = self.target_net:forward(state0)
+        states[n] = state0
+        targets[n] = all_outputs:clone()
+        if n == numExp then -- if terminal state
+          local qmax = reward0
+          targets[n][action0] = qmax
+        else
+          local best_action = self:policy(state1)
+          local qmax = reward0 + self.gamma * best_action.value
+          targets[n][action0] = qmax
+          if qmax > 1 then
+            print(qmax)
           end
         end
-        self:computeGradient(inputs, targets)
       end
+      self:computeGradient(states, targets)
+    end
+    -- update target network every few learning steps
+    if self.age % self.tau == 0 then
+      self.target_net = self.net:clone()
+      self.target_net:evaluate()
     end
   end
+
 
   -- epsilon annealing
   if self.epsilon > self.epsilon_min then
@@ -314,7 +308,13 @@ end
 -- make move --
 function AI_Player:play()
   -- current state
-  local state = deepcopy(board:getBoard()) -- make a deep copy
+  local state = {}
+  for i = 1,4 do
+    state[i] = {}
+    for j = 1,4 do
+      state[i][j] = board:getBoard()[i][j].id
+    end
+  end
   state = convert2DArrTo1D(state) -- convert 2D board state to 1D
   -- NN decides on an action (a0) given the current board state
   local action
@@ -347,7 +347,8 @@ function AI_Player:pickUpPawn(pawn)
   local i = 1
   while pawn.pawnPos[i] do
     local x, y = pawn.pawnPos[i][1], pawn.pawnPos[i][2]
-    board[x][y] = 0
+    board[x][y].id = 0
+    board[x][y].color = {255,255,255}
     i = i + 1
   end
 end
@@ -358,7 +359,8 @@ function AI_Player:placePawn(pawn)
   local i = 1
   while pawn.pawnPos[i] do
     local x, y = pawn.pawnPos[i][1], pawn.pawnPos[i][2]
-    board[x][y] = pawn.pawnId
+    board[x][y].id = pawn.pawnId
+    board[x][y].color = pawn.pawnColor
     i = i + 1
   end
 end
@@ -367,7 +369,7 @@ function AI_Player:getLegalActions()
 
   local legalActions = {}
 
-  function initAction()
+  local function initAction()
     local LPawnPos = {}
     for i = 1,4 do
       LPawnPos[i] = {}
@@ -611,10 +613,10 @@ function AI_Player:isALegalAction(action)
   local numFreeSlots, numEqualSlots = 0, 0
   for i = 1, 4 do
     local x, y = action.LPawnPos[i][1], action.LPawnPos[i][2]
-    if board[x][y] == 0 or board[x][y] == self.LPawn.pawnId then
+    if board[x][y].id == 0 or board[x][y].id == self.LPawn.pawnId then
       numFreeSlots = numFreeSlots + 1
     end
-    if board[x][y] == self.LPawn.pawnId then
+    if board[x][y].id == self.LPawn.pawnId then
       numEqualSlots = numEqualSlots + 1
     end
   end
@@ -630,10 +632,10 @@ function AI_Player:isALegalAction(action)
   else
     NPawnId = self.NPawn2.pawnId
   end
-  if board[x][y] == 0 or board[x][y] == NPawnId then
+  if board[x][y].id == 0 or board[x][y].id == NPawnId then
     numFreeSlots = numFreeSlots + 1
   end
-  if board[x][y] == NPawnId then
+  if board[x][y].id == NPawnId then
     numEqualSlots = numEqualSlots + 1
   end
   if numFreeSlots == 1 and numFreeSlots > numEqualSlots then
@@ -658,7 +660,13 @@ function AI_Player:train(winner)
     self.reward_tot = self.reward_tot + self.REWARD_FOR_LOSS
   end
   -- add terminal state to the state window
-  local state = deepcopy(board:getBoard())
+  local state = {}
+  for i = 1,4 do
+    state[i] = {}
+    for j = 1,4 do
+      state[i][j] = board:getBoard()[i][j].id
+    end
+  end
   state = convert2DArrTo1D(state)
   self:addState(state)
   self:backward() -- train the network
