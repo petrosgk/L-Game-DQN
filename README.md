@@ -3,8 +3,7 @@
 Implementation of the L Game, using Deep-Q Learning for training the AI player. Using variable size batch updates to accelerate training by mitigating loss of the rare reward signal.
 
 Trained agent (AI) vs. random player:
-
-Trained agent vs. trained agent:
+https://youtu.be/9MGdRd4abiw
 
 
 
